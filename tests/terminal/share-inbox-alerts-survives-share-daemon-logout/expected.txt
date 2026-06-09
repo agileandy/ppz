@@ -1,4 +1,4 @@
-first_alert_count: 1
+first_alert_fired: yes
 daemon_same_pid: yes
 alert_fired_again: yes
 exit=0

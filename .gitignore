@@ -21,3 +21,7 @@ coverage.html
 .env.local
 .env*.local
 
+# Local self-hosted server config (NATS operator seed, session key, etc.)
+# Created by scripts/ppz-local-server.sh — never commit.
+.ppz-local/
+

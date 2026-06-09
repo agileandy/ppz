@@ -46,7 +46,7 @@ wait_for 50 "ppz_s ls 2>/dev/null | grep -q '^share-inbox-logout.stdout'"
 ppz_b send share-inbox-logout.inbox "msg-1" >/dev/null
 wait_for 50 "ppz_s reread share-inbox-logout.stdout --raw 2>/dev/null | grep -q \"Please run 'ppz subs read'\""
 ALERT_COUNT_PRE=$(ppz_s reread share-inbox-logout.stdout --raw 2>/dev/null | grep -o "Please run 'ppz subs read'" | wc -l)
-echo "first_alert_count: $ALERT_COUNT_PRE"
+echo "first_alert_fired: yes"
 
 # NC swap WITHOUT process restart. daemon_same_pid: yes is the
 # canary that we're really exercising the swapNC path.

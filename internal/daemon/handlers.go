@@ -1019,6 +1019,9 @@ func (d *Daemon) resolveSendTarget(ctx context.Context, reqHandle, reqChannel, b
 				errors.Is(err, nats.ErrTimeout),
 				errors.Is(err, nats.ErrConnectionClosed),
 				errors.Is(err, nats.ErrNoServers):
+				if !errors.Is(err, nats.ErrConnectionClosed) && !errors.Is(err, nats.ErrNoServers) {
+					d.reportNATSFailure()
+				}
 				return sendTarget{}, cliproto.New(cliproto.ENATSUnreachable)
 			default:
 				return sendTarget{}, cliproto.New(cliproto.EInvalidPipe)
@@ -1098,6 +1101,9 @@ func (d *Daemon) resolveSendTarget(ctx context.Context, reqHandle, reqChannel, b
 				errors.Is(err, nats.ErrTimeout),
 				errors.Is(err, nats.ErrConnectionClosed),
 				errors.Is(err, nats.ErrNoServers):
+				if !errors.Is(err, nats.ErrConnectionClosed) && !errors.Is(err, nats.ErrNoServers) {
+					d.reportNATSFailure()
+				}
 				return sendTarget{}, cliproto.New(cliproto.ENATSUnreachable)
 			default:
 				return sendTarget{}, cliproto.New(cliproto.EInvalidPipe)

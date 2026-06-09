@@ -284,6 +284,23 @@ func (d *Daemon) swapNCLocked(caller string, newNC *nats.Conn) {
 	}
 }
 
+// reportNATSFailure is called when a JetStream operation times out on a
+// nominally-connected NC — the "zombie connection" state where TCP is
+// alive and nc.Status() == CONNECTED, but the server's JetStream tier is
+// not responding (e.g. JWT just expired server-side, or the server is
+// temporarily overloaded). Closing the NC transitions its Status to CLOSED
+// so natsStateString stops lying "connected" and the next ensureNATS call
+// rebuilds rather than coalescing on the stale connection.
+func (d *Daemon) reportNATSFailure() {
+	d.ncMu.Lock()
+	nc := d.NC
+	d.ncMu.Unlock()
+	if nc == nil || !nc.IsConnected() {
+		return
+	}
+	nc.Close()
+}
+
 // recordNATSEvent is the single sink for connection-state events: it
 // stamps the in-memory ring (hot tail for `ppz status` /
 // `ppz diagnostics`) AND appends to the on-disk jsonl (full history,

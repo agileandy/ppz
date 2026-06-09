@@ -10,6 +10,7 @@ import (
 	"github.com/nats-io/nats.go"
 	"github.com/nats-io/nats.go/jetstream"
 
+	"github.com/pipescloud/ppz/internal/cliproto"
 	"github.com/pipescloud/ppz/internal/envelope"
 	"github.com/pipescloud/ppz/internal/natsubj"
 )
@@ -192,5 +193,50 @@ func TestPublishBatchWithAck_SucceedsAndPersistsAllWhenStreamCaptures(t *testing
 	if info.State.Msgs != uint64(len(datas)) {
 		t.Fatalf("stream stored %d messages, want %d — publishBatchWithAck reported success but not every message is on the server",
 			info.State.Msgs, len(datas))
+	}
+}
+
+// TestPublishWithAck_ClosesNCOnJetStreamTimeout pins the zombie-connection
+// detection: when js.Publish times out (JetStream non-responsive — e.g.
+// JWT just expired server-side while TCP is still alive), publishWithAck
+// must close the NC so the next ensureNATS call rebuilds rather than
+// coalescing on the stale connection.
+//
+// The production symptom: ppz send returns E_DELIVERY_UNCONFIRMED on the
+// first attempt, then E_NATS_UNREACHABLE on all subsequent attempts, while
+// ppz status keeps lying "nats: connected (N minutes ago)". The NC is
+// genuinely CONNECTED at the TCP/NATS level, so ensureNATS's IsConnected()
+// guard never fires — the zombie persists until the server eventually kicks
+// the TCP connection (minutes later). After this fix, the first timeout
+// closes the NC so the next command rebuilds immediately.
+//
+// RED: without reportNATSFailure, nc.IsConnected() is still true after the
+// timeout — the zombie persists.
+// GREEN: after the publish timeout, nc.IsConnected() is false (NC closed).
+func TestPublishWithAck_ClosesNCOnJetStreamTimeout(t *testing.T) {
+	// startEmbeddedJS server has JetStream but we create NO stream —
+	// js.Publish hangs until jsPublishAckTimeout, simulating a server
+	// that's connected but not acking JetStream requests.
+	nc := startEmbeddedJS(t)
+	d := New(t.TempDir(), "")
+	d.NC = nc
+
+	// Shrink the ack timeout so the test runs in ~100ms, not 5s.
+	prev := jsPublishAckTimeout
+	jsPublishAckTimeout = 100 * time.Millisecond
+	t.Cleanup(func() { jsPublishAckTimeout = prev })
+
+	subject := natsubj.BuildSubject(uuid.New(), "", "bob", "inbox")
+	e := d.publishWithAck(subject, []byte("zombie test"))
+	if e == nil {
+		t.Fatal("expected error from unconfirmed publish, got nil")
+	}
+	if e.Code != cliproto.EDeliveryUnconfirmed {
+		t.Fatalf("expected E_DELIVERY_UNCONFIRMED, got %s", e.Code)
+	}
+	// GREEN contract: after a JetStream timeout on a connected NC, the
+	// NC must be closed so the next ensureNATS call rebuilds.
+	if nc.IsConnected() {
+		t.Fatal("NC is still connected after publish timeout — zombie connection not detected; ppz status will lie 'connected' while all operations fail")
 	}
 }

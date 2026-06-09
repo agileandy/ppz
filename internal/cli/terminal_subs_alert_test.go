@@ -250,6 +250,85 @@ func TestTerminalSubsAlertPump_CopilotHarness_UsesCarriageReturnSubmit(t *testin
 	}
 }
 
+// TestTerminalSubsAlertStateMachineClearCancelsPending and
+// TestTerminalSubsAlertPumpSilentAfterCursorAdvanced pin the fix for
+// the double-delivery bug: after the first alert fires, the
+// level-triggered subs wait loop re-sets pending within 250ms (the
+// message is still unread). Without a way to cancel that pending bit
+// when the cursor IS eventually advanced, the pump fires a second alert
+// once the cooldown expires — even though the agent already handled the
+// message. ObserveSubsClear is the missing cancellation: the pump calls
+// it when subs wait returns an empty reply (unread=0), meaning the
+// agent ran ppz subs read and advanced the cursor. After a clear, no
+// further alert should fire for that delivery.
+
+func TestTerminalSubsAlertStateMachineClearCancelsPending(t *testing.T) {
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	sm := newTerminalSubsAlertStateMachine(terminalSubsAlertConfig{
+		IdleAfter: 15 * time.Second,
+		Cooldown:  30 * time.Second,
+		Message:   terminalSubsAlertMessage,
+	})
+
+	sm.ObserveSubsUnread(now)
+	sm.ReadyAlert(now.Add(16 * time.Second)) // first alert fires
+
+	// Level-triggered loop re-sets pending 250ms later (still unread).
+	sm.ObserveSubsUnread(now.Add(16*time.Second + 250*time.Millisecond))
+	// Agent runs ppz subs read — cursor advances, next subs wait empty.
+	sm.ObserveSubsClear(now.Add(17 * time.Second))
+
+	if got := sm.ReadyAlert(now.Add(48 * time.Second)); got != "" {
+		t.Fatalf("ReadyAlert after cursor advanced = %q, want empty (message was handled)", got)
+	}
+}
+
+func TestTerminalSubsAlertStateMachineFiringAfterClearThenNewUnread(t *testing.T) {
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	sm := newTerminalSubsAlertStateMachine(terminalSubsAlertConfig{
+		IdleAfter: 15 * time.Second,
+		Message:   terminalSubsAlertMessage,
+	})
+
+	sm.ObserveSubsUnread(now)
+	sm.ReadyAlert(now.Add(16 * time.Second)) // first alert fires
+
+	sm.ObserveSubsUnread(now.Add(16*time.Second + 250*time.Millisecond)) // level-triggered re-set
+	sm.ObserveSubsClear(now.Add(17 * time.Second))                        // cursor advanced
+
+	// New message arrives after the clear.
+	sm.ObserveSubsUnread(now.Add(18 * time.Second))
+
+	if got := sm.ReadyAlert(now.Add(34 * time.Second)); got == "" {
+		t.Fatal("ReadyAlert after clear + new unread = empty, want alert (new message must still fire)")
+	}
+}
+
+func TestTerminalSubsAlertPumpSilentAfterCursorAdvanced(t *testing.T) {
+	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
+	var ptyStdin bytes.Buffer
+	pump := newTerminalSubsAlertPump(terminalSubsAlertConfig{
+		IdleAfter: 15 * time.Second,
+		Cooldown:  30 * time.Second,
+		Message:   terminalSubsAlertMessage,
+	}, &ptyStdin)
+
+	pump.ObserveSubsUnread(now)
+	if wrote := pump.Flush(now.Add(16 * time.Second)); !wrote {
+		t.Fatal("first Flush did not write alert")
+	}
+
+	// Level-triggered subs wait re-sets pending 250ms after the alert
+	// fires (still unread; agent hasn't read yet).
+	pump.ObserveSubsUnread(now.Add(16*time.Second + 250*time.Millisecond))
+	// Agent runs ppz subs read — cursor advances, pump observes empty reply.
+	pump.ObserveSubsClear(now.Add(17 * time.Second))
+
+	if wrote := pump.Flush(now.Add(48 * time.Second)); wrote {
+		t.Fatalf("Flush after cursor advanced wrote second alert: %q, want silent", ptyStdin.String())
+	}
+}
+
 func TestTerminalSubsAlertPumpCooldownSuppressesImmediateRepeatedAlerts(t *testing.T) {
 	now := time.Date(2026, 5, 3, 12, 0, 0, 0, time.UTC)
 	var ptyStdin bytes.Buffer

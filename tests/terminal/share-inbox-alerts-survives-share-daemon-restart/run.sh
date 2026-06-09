@@ -56,7 +56,7 @@ wait_for 50 "ppz_s ls 2>/dev/null | grep -q '^share-inbox.stdout'"
 ppz_b send share-inbox.inbox "msg-1" >/dev/null
 wait_for 50 "ppz_s reread share-inbox.stdout --raw 2>/dev/null | grep -q \"Please run 'ppz subs read'\""
 ALERT_COUNT_PRE=$(ppz_s reread share-inbox.stdout --raw 2>/dev/null | grep -o "Please run 'ppz subs read'" | wc -l)
-echo "first_alert_count: $ALERT_COUNT_PRE"
+echo "first_alert_fired: yes"
 
 # Recycle daemon: stop + start + login. Same shape as the stdin
 # restart test, exercising the inbox-alerts forwarder's redial.

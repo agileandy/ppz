@@ -36,6 +36,11 @@ func (d *Daemon) publishWithAck(subject string, data []byte) *cliproto.Error {
 	ctx, cancel := context.WithTimeout(context.Background(), jsPublishAckTimeout)
 	defer cancel()
 	if _, err := js.Publish(ctx, subject, data); err != nil {
+		// Timeout on a live NC → zombie connection. Close so the next
+		// ensureNATS rebuilds rather than coalescing on the dead conn.
+		if !isNATSConnErr(err) {
+			d.reportNATSFailure()
+		}
 		return classifyPublishErr(err)
 	}
 	return nil
@@ -65,12 +70,16 @@ func (d *Daemon) publishBatchWithAck(subject string, datas [][]byte) *cliproto.E
 	select {
 	case <-js.PublishAsyncComplete():
 	case <-time.After(jsPublishAckTimeout):
+		d.reportNATSFailure()
 		return cliproto.New(cliproto.EDeliveryUnconfirmed)
 	}
 	for _, f := range futures {
 		select {
 		case <-f.Ok():
 		case e := <-f.Err():
+			if !isNATSConnErr(e) {
+				d.reportNATSFailure()
+			}
 			return classifyPublishErr(e)
 		}
 	}
@@ -91,6 +100,13 @@ func classifyPublishErr(err error) *cliproto.Error {
 	default:
 		return cliproto.New(cliproto.EDeliveryUnconfirmed)
 	}
+}
+
+// isNATSConnErr reports whether err indicates the connection is already
+// closed/gone (not a zombie timeout). Used to skip the redundant
+// reportNATSFailure call in those cases.
+func isNATSConnErr(err error) bool {
+	return errors.Is(err, nats.ErrConnectionClosed) || errors.Is(err, nats.ErrNoServers)
 }
 
 // buildBroadcastEnvelope is the pure envelope-assembly step inside

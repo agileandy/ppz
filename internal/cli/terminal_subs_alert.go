@@ -66,6 +66,15 @@ func (s *terminalSubsAlertStateMachine) ObserveSubsUnread(now time.Time) {
 	s.pending = true
 }
 
+// ObserveSubsClear cancels any pending alert. Called when subs wait
+// returns an empty reply (unread=0), meaning the agent advanced the
+// cursor via ppz subs read — the message was handled.
+func (s *terminalSubsAlertStateMachine) ObserveSubsClear(now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pending = false
+}
+
 func (s *terminalSubsAlertStateMachine) ReadyAlert(now time.Time) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -138,6 +147,12 @@ func (p *terminalSubsAlertPump) ObserveUserInput(now time.Time, input []byte) {
 // the alert text — so this takes only `now`.
 func (p *terminalSubsAlertPump) ObserveSubsUnread(now time.Time) {
 	p.sm.ObserveSubsUnread(now)
+}
+
+// ObserveSubsClear cancels any pending alert. Called when subs wait
+// returns an empty reply, meaning the agent advanced the cursor.
+func (p *terminalSubsAlertPump) ObserveSubsClear(now time.Time) {
+	p.sm.ObserveSubsClear(now)
 }
 
 func (p *terminalSubsAlertPump) Flush(now time.Time) bool {

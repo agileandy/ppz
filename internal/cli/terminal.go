@@ -837,6 +837,8 @@ func streamForwardSubsAlertsOnce(ctx context.Context, handle string, pump *termi
 		}
 		if subsReplyHasUnread(reply) {
 			pump.ObserveSubsUnread(time.Now())
+		} else {
+			pump.ObserveSubsClear(time.Now())
 		}
 		select {
 		case <-ctx.Done():

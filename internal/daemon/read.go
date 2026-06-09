@@ -136,6 +136,9 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 			errors.Is(err, nats.ErrTimeout),
 			errors.Is(err, nats.ErrConnectionClosed),
 			errors.Is(err, nats.ErrNoServers):
+			if !errors.Is(err, nats.ErrConnectionClosed) && !errors.Is(err, nats.ErrNoServers) {
+				d.reportNATSFailure()
+			}
 			writeReadErr(conn, cliproto.New(cliproto.ENATSUnreachable))
 		default:
 			writeReadErr(conn, cliproto.New(cliproto.EInvalidPipe))
