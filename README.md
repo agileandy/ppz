@@ -107,9 +107,10 @@ requires a current handle on the publish side) will reject.
 - [`docs/AUTH-V2.md`](docs/AUTH-V2.md) — auth design (GitHub OAuth + per-org NATS account JWTs)
 - [`docs/WIRE.md`](docs/WIRE.md) — wire protocol reference (subjects, error codes, retention semantics)
 - [`docs/ERRORS.md`](docs/ERRORS.md) — error code catalogue
+- [`docs/self-hosting.md`](docs/self-hosting.md) — full self-hosting guide (setup paths, env vars, auth, gotchas)
 
-A self-hosting / deployment guide is on the way — track issues for
-progress.
+To run the full stack (server + embedded NATS + Postgres) on your own
+machine, see **[`docs/self-hosting.md`](docs/self-hosting.md)**.
 
 ## Tests
 
