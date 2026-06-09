@@ -3,8 +3,9 @@
 > The upstream docs are thin here ("a self-hosting guide is on the way").
 > Everything below was reconstructed from the `pipescloud/ppz` source and
 > **verified on this machine** against `ppz 0.45.1` — including a full native
-> server boot (`/healthz` → `{"status":"ok","version":"0.45.1"}`, embedded NATS
-> on `:4222`, 9 tables auto-migrated). Steps marked *(verified)* were executed;
+> server boot (`/healthz` → `{"status":"ok","version":"…"}` with the build's
+> version tag, embedded NATS on `:4222`, 9 tables auto-migrated). Steps marked
+> *(verified)* were executed;
 > client-login steps are *(from source)* because running them repoints your CLI
 > off pipescloud.io (see the credential warning).
 
@@ -45,11 +46,13 @@ bypass for local/test use.
 1. **The server binaries.** The default install is client-only. Re-run the
    installer opting in:
    ```bash
-   PPZ_INCLUDE_SERVER=1 ./install.sh        # adds ppz-server, ppz-natsbootstrap, ppz-seed
-   # or, from a repo clone:
+   PPZ_INCLUDE_SERVER=1 ./install.sh        # adds ppz-server + ppz-natsbootstrap
+   # or, from a repo clone (also builds ppz-seed, needed for dev-login fixtures):
    make install                              # builds + installs all five binaries to ~/.local/bin
    ```
-   Confirm: `which ppz-server ppz-natsbootstrap` (and `ppz-seed`).
+   Confirm: `which ppz-server ppz-natsbootstrap`. Note `install.sh` does **not**
+   ship `ppz-seed` — it comes only from the repo-clone path above, so use that if
+   you want the dev-login seed fixtures.
 2. **Postgres 16** reachable. No native Postgres? Run one in Docker (below).
 3. **Docker** (only if you take the Compose path or the Docker-Postgres path).
 
@@ -108,8 +111,7 @@ the path this script automates.
 
 ## Path B — Docker Compose (fully isolated)
 
-The repo ships a complete stack. From the repo root
-(`~/Dev-Space/02-dev-tools/ppz`):
+The repo ships a complete stack. From the repo root:
 
 ```bash
 make compose-up            # builds + starts: postgres, mock-github, ppz-server (+ daemons, GUIs)
@@ -163,7 +165,7 @@ server has already issued.
 set -a; . /tmp/ppz-nats.env; set +a          # load the 3 NATS vars
 export PPZ_DB_URL="postgres://postgres:ppz@localhost:5432/ppz?sslmode=disable"
 export PPZ_HTTP_ADDR=":8080"
-export PPZ_NATS_ADDR=":4222"
+export PPZ_NATS_ADDR="127.0.0.1:4222"        # bind an explicit host; a bare ":4222" resolves to 0.0.0.0, which the server can't dial back on macOS (account provisioning 500s)
 export PPZ_BASE_URL="http://localhost:8080"
 export PPZ_SESSION_KEY="some-32+-byte-random-string-here"   # rotating it invalidates sessions
 export PPZ_DEV_LOGIN="true"                  # enable /dev/login + seed-key auth (omit in prod)
@@ -178,7 +180,9 @@ pipes, oauth_device_codes, oauth_tokens, invites`).
 
 ### 4. Verify *(verified)*
 ```bash
-curl -fsS http://localhost:8080/healthz      # -> {"status":"ok","version":"0.45.1"}
+curl -fsS http://localhost:8080/healthz      # -> {"status":"ok","version":"<build version>"}
+                                             # version is the -ldflags build tag (e.g. v0.45.1,
+                                             # or v0.43.2-3-gc2aa137 for a dev build; "dev" if unset)
 lsof -nP -iTCP:4222 -sTCP:LISTEN              # embedded NATS is listening
 ```
 
@@ -201,11 +205,12 @@ Read by `cmd/ppz-server` (defaults in parentheses):
 | `PPZ_NATS_SYSTEM_ACCOUNT_JWT` | Yes | NATS system account JWT. From bootstrap. |
 | `PPZ_DB_URL` | (default localhost) | Postgres DSN (`postgres://postgres:ppz@localhost:5432/ppz?sslmode=disable`). |
 | `PPZ_HTTP_ADDR` | (`:8080`) | HTTP/GUI listen address. |
-| `PPZ_NATS_ADDR` | (`:4222`) | Embedded NATS listen address. |
+| `PPZ_NATS_ADDR` | (`:4222`) | Embedded NATS listen address. On macOS set `127.0.0.1:4222` — a bare `:4222` resolves to `0.0.0.0`, which the server then can't dial back when provisioning accounts. |
 | `PPZ_SESSION_KEY` | Recommended | Signs web sessions; rotating it invalidates all sessions. |
 | `PPZ_BASE_URL` | (`http://localhost:8080`) | Used to build OAuth callback URLs. |
 | `PPZ_JETSTREAM_STORE_DIR` | Recommended | On-disk JetStream store; without it messages aren't durable across restarts. |
 | `PPZ_NATS_PUBLIC_URL` | Optional | Override the NATS URL advertised to clients (else derived from `Host`). |
+| `PPZ_NATS_JWT_TTL` | Optional (`5m`) | Lifetime of minted per-client NATS user JWTs. Only honoured when `PPZ_DEV_LOGIN=true` (test knob). |
 | `PPZ_DEV_LOGIN` | Optional | `"true"` enables `POST /dev/login` + admin wipe — local/test only. |
 | `PPZ_SEED` / `PPZ_SEED_DIR` | Optional | (entrypoint-level) run the seeder; writes plaintext keys to `SEED_DIR`. |
 | `PPZ_GITHUB_CLIENT_ID` / `_SECRET` / `_AUTHORIZE_URL` / `_TOKEN_URL` / `_USER_URL` | Prod auth | GitHub OAuth; URLs default to real github.com when unset. |
@@ -254,7 +259,8 @@ Browse to `http://localhost:8080/login`, sign in, create an org + API key under
 
 ## ⚠️ Pointing your CLI at a local server logs you out of pipescloud.io
 
-`ppz` keeps a **single** credential (`~/.config/ppz/credentials`). Running
+`ppz` keeps a **single** credential (`$PPZ_HOME/credentials`, default
+`~/.ppz/credentials`). Running
 `ppz login http://localhost:8080` **replaces** your pipescloud.io login — your
 hosted handle/session is gone until you `ppz login pipescloud.io` again. If you
 need both concurrently, isolate the local client with a separate home:
@@ -275,6 +281,12 @@ pipescloud.io daemon untouched.
 - **Don't regenerate bootstrap creds casually.** A new Operator key invalidates
   every already-issued account/user JWT → clients hit "Authorization Violation"
   on reconnect. Persist `ppz-natsbootstrap` output; only rotate deliberately.
+- **macOS: bind NATS to `127.0.0.1`, not `:4222`.** A bare `:4222` makes the
+  embedded NATS advertise its own client URL as `nats://0.0.0.0:4222`, which the
+  server dials to provision accounts. macOS can't dial `0.0.0.0`, so the first
+  `ppz login` 500s (`can't assign requested address`). Set
+  `PPZ_NATS_ADDR=127.0.0.1:4222`. (Linux routes `0.0.0.0` to loopback, so it's
+  Mac-specific.)
 - **NATS URL is derived from `Host`.** Reach the server via `localhost:8080` and
   you'll be handed `nats://localhost:4222`. On odd non-Docker setups where the
   client can't reach NATS, force it with `PPZ_NATS_URL=nats://localhost:4222`
