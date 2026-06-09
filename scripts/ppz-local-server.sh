@@ -288,25 +288,38 @@ cmd_setup() {
   chmod 600 "$META_ENV"
 
   ok "configuration written to $CONFIG_DIR"
-  print_next_steps "$auth_mode" "$base_url"
+  print_next_steps "$auth_mode" "$base_url" "$seed"
 
   if ask_yesno "Start the server now?" Y; then cmd_start; fi
 }
 
-print_next_steps() { # print_next_steps <auth_mode> <base_url>
-  local auth_mode="$1" base_url="$2"
+print_next_steps() { # print_next_steps <auth_mode> <base_url> <seed>
+  local auth_mode="$1" base_url="$2" seed="${3:-no}"
+  local keyfile="$CONFIG_DIR/seed/key-alpha.txt"
   hdr "Next steps"
   say "Start the server:   ${BOLD}scripts/ppz-local-server.sh --start${RST}"
   say "Then log the CLI in:"
   if [ "$auth_mode" = "dev" ]; then
-    say "  1. ${BOLD}ppz login ${base_url} --no-open${RST}"
-    say "  2. In a browser, visit ${BOLD}${base_url}/dev/login?user=foo${RST} to get a session"
-    say "  3. Open the device-verify link the CLI printed, paste the code, Approve"
-    say "  ${DIM}(dev-login has no GitHub; the /dev/login URL is what grants the browser session)${RST}"
+    # A dev-login server has NO GitHub app, so the browser device flow
+    # (a bare `ppz login URL`) dead-ends at "github oauth not configured".
+    # Authenticate with the seeded API key instead — the seed step already
+    # wrote it; nothing to create by hand.
+    if [ "$seed" = "yes" ]; then
+      say "  ${BOLD}ppz login ${base_url} -apikey \"\$(cat ${keyfile})\"${RST}"
+      say "  ${DIM}# dev-login server → authenticate with the seeded API key (org alpha).${RST}"
+      say "  ${DIM}# Prefix with PPZ_HOME=/tmp/ppz-local to keep a pipescloud.io login intact.${RST}"
+    else
+      say "  ${YEL}Seeding was skipped, so there's no ready-made API key.${RST} Either:"
+      say "    • re-run ${BOLD}--reconfigure${RST} and enable seeding, then use the printed -apikey command, or"
+      say "    • open ${BOLD}${base_url}/dev/login?user=<name>${RST} in a browser to mint a GUI session,"
+      say "      then create an API key under ${BOLD}/dashboard${RST} and log in with -apikey."
+    fi
+    say "  ${DIM}A bare 'ppz login ${base_url}' uses the GitHub device flow, which a dev-login${RST}"
+    say "  ${DIM}server has no GitHub app for — use the API key above instead.${RST}"
   else
     say "  ${BOLD}ppz login ${base_url}${RST}   ${DIM}# opens GitHub device-flow approval${RST}"
   fi
-  say "GUI:  ${BOLD}${base_url}${RST}"
+  say "GUI:  ${BOLD}${base_url}${RST}   ${DIM}(browse here; sign in via /dev/login?user=foo when dev-login is on)${RST}"
 }
 
 # ════════════════════════════════════════════════════════════════════
@@ -391,6 +404,14 @@ cmd_report() {
   hdr "Actions"
   say "  ${BOLD}scripts/ppz-local-server.sh --start${RST}        run the server"
   say "  ${BOLD}scripts/ppz-local-server.sh --reconfigure${RST}  change settings (you'll be asked before touching NATS creds)"
+  if [ "${PPZ_LOCAL_AUTH_MODE:-}" != "github" ]; then
+    if [ "${PPZ_LOCAL_SEED:-no}" = "yes" ]; then
+      say "  ${BOLD}ppz login ${PPZ_BASE_URL:-http://localhost:8080} -apikey \"\$(cat ${CONFIG_DIR}/seed/key-alpha.txt)\"${RST}"
+      say "    ${DIM}log the CLI in (dev-login server → seeded API key, org alpha)${RST}"
+    else
+      say "    ${DIM}dev-login server, no seed: mint a session at ${PPZ_BASE_URL:-http://localhost:8080}/dev/login?user=<name>, create a key under /dashboard${RST}"
+    fi
+  fi
 }
 
 # ════════════════════════════════════════════════════════════════════
