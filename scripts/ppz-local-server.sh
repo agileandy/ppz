@@ -157,7 +157,12 @@ cmd_setup() {
   hdr "1. Server endpoints"
   local http_addr nats_addr base_url
   ask "HTTP / GUI listen address" ":8080" http_addr
-  ask "Embedded NATS listen address" ":4222" nats_addr
+  # Bind NATS to an explicit host, not the bare ":4222". The embedded
+  # server reports its bind address back as the client URL the server
+  # itself dials to provision accounts; a bare port resolves the host to
+  # 0.0.0.0, which is undialable on macOS ("can't assign requested
+  # address"). 127.0.0.1 works everywhere and stays loopback-only.
+  ask "Embedded NATS listen address" "127.0.0.1:4222" nats_addr
   ask "Base URL (used to build OAuth callbacks + device-verify links)" "http://localhost:$(port_of "$http_addr")" base_url
 
   # — auth —
