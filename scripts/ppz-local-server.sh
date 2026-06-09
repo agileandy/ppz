@@ -130,7 +130,7 @@ pg_docker_ensure() { # pg_docker_ensure <container> <port>
     running) ok "postgres container '$c' already running";;
     stopped) say "starting existing postgres container '$c'…"; docker start "$c" >/dev/null; ok "started";;
     absent)
-      say "creating postgres container '$c' (postgres:16-alpine) on :$p…"
+      say "creating postgres container '$c' (postgres:16-alpine) on :${p}…"
       docker run -d --name "$c" \
         -e POSTGRES_PASSWORD=ppz -e POSTGRES_DB=ppz \
         -p "$p:5432" postgres:16-alpine >/dev/null
@@ -200,7 +200,7 @@ cmd_setup() {
   local seed="no"
   local seed_default="N"; [ "$auth_mode" = "dev" ] && seed_default="Y"
   if [ "$auth_mode" = "dev" ]; then
-    say "$YEL Dev-login signs in as a seeded user, so seeding is recommended for this mode.$RST"
+    say "${YEL} Dev-login signs in as a seeded user, so seeding is recommended for this mode.$RST"
   fi
   if ask_yesno "Seed demo users/accounts?" "$seed_default"; then seed="yes"; fi
 
@@ -224,12 +224,12 @@ cmd_setup() {
   hdr "6. NATS trust root"
   local regen_nats="yes"
   if [ -s "$NATS_ENV" ]; then
-    say "$YEL╭──────────────────────────────────────────────────────────────╮$RST"
-    say "$YEL│  Existing NATS operator credentials found.                    │$RST"
-    say "$YEL│  Regenerating them mints a NEW operator key, which            │$RST"
-    say "$YEL│  INVALIDATES every login/JWT already issued. All clients      │$RST"
-    say "$YEL│  would fail to connect and must run 'ppz login' again.         │$RST"
-    say "$YEL╰──────────────────────────────────────────────────────────────╯$RST"
+    say "${YEL}╭──────────────────────────────────────────────────────────────╮$RST"
+    say "${YEL}│  Existing NATS operator credentials found.                    │$RST"
+    say "${YEL}│  Regenerating them mints a NEW operator key, which            │$RST"
+    say "${YEL}│  INVALIDATES every login/JWT already issued. All clients      │$RST"
+    say "${YEL}│  would fail to connect and must run 'ppz login' again.         │$RST"
+    say "${YEL}╰──────────────────────────────────────────────────────────────╯$RST"
     if ask_yesno "Keep the existing NATS credentials? (recommended)" Y; then regen_nats="no"; fi
   fi
   if [ "$regen_nats" = "yes" ]; then
