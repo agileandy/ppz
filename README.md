@@ -107,6 +107,7 @@ requires a current handle on the publish side) will reject.
 - [`docs/AUTH-V2.md`](docs/AUTH-V2.md) — auth design (GitHub OAuth + per-org NATS account JWTs)
 - [`docs/WIRE.md`](docs/WIRE.md) — wire protocol reference (subjects, error codes, retention semantics)
 - [`docs/ERRORS.md`](docs/ERRORS.md) — error code catalogue
+- [`docs/self-hosting.md`](docs/self-hosting.md) — full self-hosting guide (setup paths, env vars, auth, gotchas)
 
 See **[Self-hosting](#self-hosting)** below to run the full stack
 (server + embedded NATS + Postgres) on your own machine.
@@ -137,8 +138,13 @@ PPZ_INCLUDE_SERVER=1 curl -fsSL https://raw.githubusercontent.com/pipescloud/ppz
 
 scripts/ppz-local-server.sh          # answer the prompts → setup
 scripts/ppz-local-server.sh --start  # load the config + run ppz-server
-ppz login http://localhost:8080      # point the CLI at your server
+# point the CLI at your server. The default (dev-login) setup has no GitHub app,
+# so authenticate with the seeded API key — the helper prints this exact line:
+ppz login http://localhost:8080 -apikey "$(cat .ppz-local/seed/key-alpha.txt)"
 ```
+
+For the full guide (all three setup paths, env-var reference, auth modes, and
+gotchas) see **[`docs/self-hosting.md`](docs/self-hosting.md)**.
 
 It asks a handful of questions and then sets up:
 
