@@ -29,13 +29,19 @@ error codes, and HTTP error response codes all derive from it.
 | 19 | `E_NATS_UNREACHABLE` | daemon could not publish to NATS | — |
 | 20 | `E_INVALID_PIPE` | `read`/`send`/`broadcast` target had a malformed or unsupported pipe name | 400 |
 | 21 | `E_PIPE_TAKEN` | pipe with this name already exists on this source | 409 |
+| 21 | `E_NAME_TAKEN` | user-typed name collides with an existing source, uncollared pipe, or reserved manifold-prefix path at this manifold (Phase 1.5.1 first-wins collision rule) | 409 |
 | 22 | `E_PIPE_NOT_FOUND` | no pipe with this name on this source | 404 |
 | 23 | `E_INVALID_SUBJECT` | `--subject` value violates a reserved-prefix rule (the `ack:` prefix is daemon-internal) | 400 |
+| 24 | `E_INVALID_MANIFOLD` | a manifold (hierarchical-grouping path) segment fails handle validation | 400 |
+| 25 | `E_DELIVERY_UNCONFIRMED` | message was published but no JetStream PubAck arrived within the deadline — it may or may not have landed | — |
+| 26 | `E_DAEMON_TIMEOUT` | daemon accepted the IPC connection but did not reply within the client deadline | — |
 | 27 | `E_INVALID_PRIORITY` | `--priority` value outside `1\|high`, `2\|medium\|med`, `3\|low` (0 = flag omitted; not passable explicitly) | 400 |
 
-Exit codes 21 and 22 are reserved here for the user-creatable-pipes feature
-that lands in a later phase; nothing in the current code path returns them
-yet.
+`E_PIPE_TAKEN` and `E_NAME_TAKEN` deliberately share exit 21: both mean "the
+name you tried to create is already in use", and callers that branch on the
+exit code should treat them identically (pick a different name). Scripts that
+need to distinguish the two must parse the `<CODE>` token from stderr, which
+is stable.
 
 ## Standard messages (for stderr)
 
@@ -61,4 +67,14 @@ entity name available) keep the static message.
 | `E_PIPE_TAKEN` | `pipe '<name>' already exists on source '<handle>'` |
 | `E_PIPE_NOT_FOUND` | `pipe '<name>' not found on source '<handle>'` |
 | `E_INVALID_SUBJECT` | `invalid subject; the 'ack:' prefix is reserved for system-emitted protocol messages` |
+| `E_NAME_TAKEN` (source holds the name) | `name '<name>' is already taken by source at <location>` |
+| `E_NAME_TAKEN` (uncollared pipe holds the name) | `name '<name>' is already taken by uncollared pipe at <location>` |
+| `E_NAME_TAKEN` (manifold-prefix reservation) | `manifold path '<prefix>' is reserved by source '<handle>' at <location>` |
+| `E_NAME_TAKEN` (generic, no entity available) | `name already taken by another resource at this manifold` |
+| `E_INVALID_MANIFOLD` | `invalid manifold: each dot-separated segment must match [a-z0-9-] (max 32, no leading/trailing -, not reserved)` |
+| `E_DELIVERY_UNCONFIRMED` | `delivery unconfirmed; the message was published but the server did not acknowledge it in time — it may or may not have landed; retry if your workflow tolerates a possible duplicate` |
+| `E_DAEMON_TIMEOUT` | `daemon did not respond in time; it may be busy or stuck (e.g. mid-restart) — retry, or run 'ppz daemon restart'` |
 | `E_INVALID_PRIORITY` | `invalid priority; use 1|high, 2|medium, or 3|low` |
+
+`<location>` in the `E_NAME_TAKEN` variants renders as `root` when the
+manifold is empty, otherwise `manifold '<manifold>'`.
