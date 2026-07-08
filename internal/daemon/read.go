@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -261,6 +262,7 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 						CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 						InReplyTo:    env.InReplyTo,
 						AckRequested: env.AckRequested,
+						Priority:     env.Priority,
 					})
 					lastSeqSeen = md.Sequence.Stream
 				}
@@ -281,6 +283,15 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 	}
 	if req.Limit > 0 && req.Limit < len(retained) {
 		retained = retained[len(retained)-req.Limit:]
+	}
+
+	// Priority ordering happens AFTER the Skip/Limit trim (so -l/--skip
+	// keep their arrival-window semantics) and NEVER touches the cursor:
+	// lastSeqSeen was finalised in the drain loop above, so reordering
+	// the slice is pure presentation — cursor advance and ack emission
+	// below are unaffected.
+	if shouldSortByPriority(req.Follow, req.Channel, req.BareTarget) {
+		sortRetainedByPriority(retained)
 	}
 
 	enc := json.NewEncoder(conn)
@@ -354,6 +365,7 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 			CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			InReplyTo:    env.InReplyTo,
 			AckRequested: env.AckRequested,
+			Priority:     env.Priority,
 		}
 		if err := enc.Encode(cliproto.ReadEvent{Message: &rm}); err != nil {
 			// CLI has closed the connection — tear down.
@@ -400,6 +412,30 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+// shouldSortByPriority gates the retained-batch priority sort to
+// message-shaped reads only:
+//   - never in follow mode: --tail keeps ONE ordering discipline for the
+//     whole stream — the live half streams one-at-a-time and can't be
+//     reordered, so the drained backlog isn't either;
+//   - never for byte-faithful pipes (stdout / stdin / stdctrl / custom):
+//     WIRE.md §8 promises those replay in arrival order, byte-for-byte,
+//     even if a sender stamped a priority on a frame;
+//   - uncollared reads (BareTarget set) mirror the CLI's tabular default
+//     (the render switch in cli/read.go), so they do sort.
+func shouldSortByPriority(follow bool, channel, bareTarget string) bool {
+	return !follow && (cliproto.IsTabularReadPipe(channel) || bareTarget != "")
+}
+
+// sortRetainedByPriority reorders the delivered window high-first on
+// EffectivePriority (unset/garbage clamp to medium). Stable, so FIFO
+// stream-sequence order is preserved within a tier — an all-default mesh
+// is byte-identical to pre-priority behaviour.
+func sortRetainedByPriority(retained []cliproto.ReadMessage) {
+	sort.SliceStable(retained, func(i, j int) bool {
+		return cliproto.EffectivePriority(retained[i].Priority) < cliproto.EffectivePriority(retained[j].Priority)
+	})
 }
 
 func writeReadErr(conn net.Conn, e *cliproto.Error) {
