@@ -217,7 +217,7 @@ List handles × pipes. With no PATTERN, lists everything the daemon knows about;
   --json     emit one JSON object per row.
   --iso      render LAST as an RFC3339 timestamp instead of a relative age.`,
 
-	"read": `usage: ppz read TGT [--tail --json --tty --raw --bare]
+	"read": `usage: ppz read TGT [-l N|--limit N] [--tail --json --tty --raw --bare]
 
 Read NEW messages from <handle>.<pipe> and advance the session cursor — the agent inbox poll (like 'git log' showing only new commits). 'ppz read inbox' reads <current>.inbox. The retrospective/forensic counterpart is 'ppz reread', which carries -l/--skip/--since and never moves the cursor.
 
@@ -225,6 +225,7 @@ Default output on inbox-shaped pipes is the v0.23 tabular format:
     HH:MM:SS  <sender|->  <body>
 where <body> is "[subject] payload" for user subjects, "ack:read → <id8>" for system ack messages (see 'ppz help acks'), or just the payload.
 
+  -l, --limit N  forward page: read only the first N (OLDEST) unread, then stop, advancing the cursor just past them so the rest is read next call. Default 0 = unlimited (drain all). When it truncates, a "showing N of M unread" notice prints to stderr. (Contrast 'ppz reread -l N', which returns the NEWEST N and never moves the cursor.)
   --bare    force legacy payload-only output (script-stable opt-out from the tabular default on inbox-shaped pipes).
   --tail    drain unread, then keep streaming live until SIGINT, advancing the cursor as messages arrive. Mutually exclusive with --tty.
   --tty     render the concatenated payloads through a virtual VT100 screen (best for <handle>.stdout from a wrapped pty). Mutually exclusive with --json.
@@ -269,7 +270,9 @@ A curated, per-session subset of pipe subjects — the agent inbox-monitor list.
   ppz subs add <target>...            subscribe (idempotent)
   ppz subs rm [--force] <target>...   unsubscribe (own inbox guarded)
   ppz subs wait [--json|--iso]        block until a subscribed pipe has unread, then print only the unread row(s)
-  ppz subs read [--json|--raw|--tty|--bare]   read each subscribed pipe that has unread
+  ppz subs read [-l N|--limit N] [--json|--raw|--tty|--bare]   read each subscribed pipe that has unread
+
+'subs read' forward-pages by DEFAULT: it reads at most 20 (oldest) unread per pipe and advances the cursor just past them, so an auto-subscribed inbox flooded with hundreds of messages can't drain the whole backlog in one call (nor starve a later 'read inbox'). It prints a "showing N of M unread" notice to stderr when it truncates; run it again for the next page, or pass --limit 0 to drain a pipe fully. -l is shorthand for --limit.
 
 A bare <target> is an uncollared pipe (read-style); use an explicit <handle>.<pipe> for a collared pipe such as an inbox.`,
 

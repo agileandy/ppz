@@ -1,0 +1,15 @@
+--- page 1 (--limit 10): count / first / last ---
+10
+msg-1
+msg-10
+--- page 1 stderr notice ---
+showing 10 of 25 unread
+--- page 2 (-l 10): count / first / last ---
+10
+msg-11
+msg-20
+--- page 3 (no flag, drain rest): count / first / last ---
+5
+msg-21
+msg-25
+exit=0

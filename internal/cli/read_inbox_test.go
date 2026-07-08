@@ -23,7 +23,7 @@ func TestRunRead_BareInboxResolvesToCurrentSourceInbox(t *testing.T) {
 
 	requests := serveReadInboxAliasDaemon(t, sock, "foo")
 
-	if err := runRead("inbox", true, false, false, false, false, false, 0, 0, 0); err != nil {
+	if err := runRead("inbox", true, false, false, false, false, false, 0, 0, 0, 0); err != nil {
 		t.Fatalf("runRead inbox: %v", err)
 	}
 
@@ -52,7 +52,7 @@ func TestRunRead_BareInboxPrefersEnvCurrentHandle(t *testing.T) {
 
 	requests := serveReadInboxAliasDaemon(t, sock, "daemon-current")
 
-	if err := runRead("inbox", true, false, false, false, false, false, 0, 0, 0); err != nil {
+	if err := runRead("inbox", true, false, false, false, false, false, 0, 0, 0, 0); err != nil {
 		t.Fatalf("runRead inbox: %v", err)
 	}
 
@@ -78,7 +78,7 @@ func TestRunReread_BareInboxPrefersEnvCurrentHandle(t *testing.T) {
 
 	requests := serveReadInboxAliasDaemon(t, sock, "daemon-current")
 
-	if err := runRead("inbox", true, false, false, false, false, true, 0, 0, 0); err != nil {
+	if err := runRead("inbox", true, false, false, false, false, true, 0, 0, 0, 0); err != nil {
 		t.Fatalf("runRead reread inbox: %v", err)
 	}
 
@@ -104,7 +104,7 @@ func TestRunRead_BareInboxWithoutCurrentSourceErrors(t *testing.T) {
 
 	_ = serveReadInboxAliasDaemon(t, sock, "")
 
-	readErr := runRead("inbox", true, false, false, false, false, false, 0, 0, 0)
+	readErr := runRead("inbox", true, false, false, false, false, false, 0, 0, 0, 0)
 	var pErr *cliproto.Error
 	if !errors.As(readErr, &pErr) || pErr.Code != cliproto.ENoCurrentSource {
 		t.Fatalf("runRead inbox without current error = %#v, want %s", readErr, cliproto.ENoCurrentSource)
@@ -147,7 +147,7 @@ func TestRunRead_ForwardsEnvCurrentHandleAsSenderHint(t *testing.T) {
 	// any read, not just `read inbox`. The Sender hint is independent
 	// of Handle/Channel resolution; it's purely the reader's identity
 	// for ack emission.
-	if err := runRead("alan.inbox", true, false, false, false, false, false, 0, 0, 0); err != nil {
+	if err := runRead("alan.inbox", true, false, false, false, false, false, 0, 0, 0, 0); err != nil {
 		t.Fatalf("runRead: %v", err)
 	}
 	if requests.count() != 1 {
@@ -179,7 +179,7 @@ func TestRunRead_NoEnvCurrent_OmitsSenderHint(t *testing.T) {
 
 	requests := serveReadInboxAliasDaemon(t, sock, "")
 
-	if err := runRead("alan.inbox", true, false, false, false, false, false, 0, 0, 0); err != nil {
+	if err := runRead("alan.inbox", true, false, false, false, false, false, 0, 0, 0, 0); err != nil {
 		t.Fatalf("runRead: %v", err)
 	}
 	if requests.count() != 1 {

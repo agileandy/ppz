@@ -260,7 +260,7 @@ Methods (Phase 1.5 reality — verbs unchanged in this phase):
 | `Switch` | `{"handle":str}` | `{"handle":str}` |
 | `Broadcast` | `{"handle":str?,"channel":str?,"payload":str}` | `{"id":str,"subject":str,"bytes":int}` |
 | `List` | `{"session":str?}` | `{"sources":[{"handle":str,"kind":str,"pipe_infos":[{"pipe":str,"total":int,"unread":int,"last_at":str?,"preview":str},…],"last_broadcast_at":str?,"last_broadcast_payload":str?},…]}` |
-| `Read` | `{"handle":str,"channel":str,"limit":int?,"skip":int?,"since_ms":int?,"json":bool?,"follow":bool?,"session":str?,"no_advance":bool?}` | streaming `ReadEvent` JSON lines |
+| `Read` | `{"handle":str,"channel":str,"limit":int?,"head":int?,"skip":int?,"since_ms":int?,"json":bool?,"follow":bool?,"session":str?,"no_advance":bool?}` | streaming `ReadEvent` JSON lines |
 | `Diag` | `{}` | `{"nats_state":str?,"nats_drops_last_hour":int?,"nats_events":[{"type":str,"at":str,"reason":str?},…]}` |
 
 Errors are returned as JSON-RPC errors with `code` = the integer exit code from
@@ -269,6 +269,18 @@ ERRORS.md and `message` = `"E_FOO: human readable"`.
 (Note: legacy field names `channel` on `Broadcast`/`Read` requests still carry
 the pipe name; this is preserved for IPC backward-compat within the Phase A
 rename. Phase B reorganises these.)
+
+`Read` bounding is split into two distinct, non-overlapping fields:
+
+- `limit` — **tail-N**: deliver the N MOST-RECENT retained messages; used only
+  by `reread` (with `all:true`), which never advances the cursor.
+- `head` — **forward page**: deliver the N OLDEST *unread* messages, early-stop
+  the drain at N, and advance the session cursor only past those N so the
+  remainder is read on the next call. Used by `read`/`subs read` (`--limit N`
+  maps here). `head:0` = unlimited. When a page truncates a larger window, the
+  daemon appends a trailing `ReadEvent` with
+  `{"meta":{"truncated":true,"unread":M,"shown":N}}` so the CLI can print a
+  "showing N of M unread" notice to stderr.
 
 ## 8. Pinned stdout (CLI)
 

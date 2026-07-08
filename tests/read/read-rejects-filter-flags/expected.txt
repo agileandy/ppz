@@ -1,7 +1,9 @@
---- read -l 2: should error, exit nonzero ---
+--- read -l 2: forward page, succeeds, returns the 2 oldest ---
+msg-1
+msg-2
+rc=0
+--- read --skip 1: reread-only flag, should error, exit nonzero ---
 rc=2
---- read --skip 1: should error, exit nonzero ---
-rc=2
---- read --since 1s: should error, exit nonzero ---
+--- read --since 1s: reread-only flag, should error, exit nonzero ---
 rc=2
 exit=0

@@ -1,0 +1,11 @@
+--- page 1: count / first / last ---
+20
+msg-1
+msg-20
+--- page 1 stderr notice ---
+showing 20 of 30 unread
+--- page 2: count / first / last ---
+10
+msg-21
+msg-30
+exit=0

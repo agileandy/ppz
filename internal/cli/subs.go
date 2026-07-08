@@ -172,9 +172,16 @@ func cmdSubsRead(args []string) error {
 	raw := fs.Bool("raw", false, "byte-faithful payloads, no separator")
 	tty := fs.Bool("tty", false, "render concatenated payloads through a virtual terminal")
 	bare := fs.Bool("bare", false, "legacy payload-only output")
+	// Forward-paging guard: unlike `ppz read`, `subs read` DEFAULTS to a
+	// page of 20 per pipe so an auto-subscribed inbox flooded with hundreds
+	// of messages can't drain the whole backlog in one call (and starve a
+	// later `read inbox`). --limit 0 opts back into drain-all.
+	limitLong := fs.Int("limit", -1, "per-pipe forward page size; 0 = drain all (default 20)")
+	limitShort := fs.Int("l", -1, "shorthand for --limit")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	head := readHeadFromLimit(*limitLong, *limitShort, 20 /* default page size */)
 	var reply cliproto.ListReply
 	if err := daemon.Call(ipcSocket(), cliproto.IPCSubsList,
 		cliproto.SubsListRequest{Session: sessionID()}, &reply); err != nil {
@@ -189,7 +196,7 @@ func cmdSubsRead(args []string) error {
 		if banner {
 			fmt.Fprintf(os.Stdout, "=== %s ===\n", target)
 		}
-		if err := runRead(target, *asJSON, false /* follow */, *tty, *raw, *bare, false /* all */, 0, 0, 0); err != nil {
+		if err := runRead(target, *asJSON, false /* follow */, *tty, *raw, *bare, false /* all */, 0, 0, 0, head); err != nil {
 			return err
 		}
 	}
