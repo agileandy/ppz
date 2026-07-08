@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net"
+	"sort"
 	"strings"
 	"time"
 
@@ -182,8 +183,10 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 	}
 
 	var (
-		retained    []cliproto.ReadMessage
-		lastSeqSeen uint64
+		retained     []cliproto.ReadMessage
+		retainedSeqs []uint64 // stream seq per retained msg — drives forward-paging cursor advance
+		lastSeqSeen  uint64
+		window       int // total unread in the window at request time (for the truncation notice)
 	)
 	// Cursor-aware vs forensic mode. `read` (default) starts at cursor+1 so
 	// the agent only sees what's new since they last looked. `reread`
@@ -221,7 +224,16 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 		// Snapshot the upper bound at request time so a fresh write
 		// during drain can't push us past the requested window.
 		historicalEnd := info.State.LastSeq
-		expected := int(historicalEnd - startSeq + 1)
+		window = int(historicalEnd - startSeq + 1)
+		expected := window
+		// Forward paging (`read`/`subs read --limit N` → req.Head): the CLI
+		// only wants the FIRST N unread, so cap the drain at N. A flooded pipe
+		// is never fully pulled into memory — we fetch N, stop, and let the
+		// cursor rest on the Nth so the remainder is read next call. reread
+		// (req.All) never pages; it keeps its full-window tail-N semantics.
+		if req.Head > 0 && !req.All && req.Head < expected {
+			expected = req.Head
+		}
 		consumer, cerr := stream.CreateOrUpdateConsumer(ctx, jetstream.ConsumerConfig{
 			FilterSubject:     filterSubject,
 			DeliverPolicy:     jetstream.DeliverByStartSequencePolicy,
@@ -261,7 +273,9 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 						CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 						InReplyTo:    env.InReplyTo,
 						AckRequested: env.AckRequested,
+						Priority:     env.Priority,
 					})
+					retainedSeqs = append(retainedSeqs, md.Sequence.Stream)
 					lastSeqSeen = md.Sequence.Stream
 				}
 				drained++
@@ -274,13 +288,27 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 			}
 		}
 	}
-	if req.Skip > 0 && req.Skip < len(retained) {
-		retained = retained[req.Skip:]
-	} else if req.Skip >= len(retained) {
-		retained = nil
+	// Reread forensic filters (skip then tail-N). No-op for `read`/`subs
+	// read`, which never set Skip/Limit.
+	retained = trimTail(retained, req.Skip, req.Limit)
+
+	// Forward paging for `read`/`subs read` (req.Head). Deliver the first N
+	// (oldest by arrival) and pull the cursor back to the last DELIVERED
+	// seq, so the unread remainder surfaces on the next call rather than
+	// being skipped. Runs on the arrival-ordered slice BEFORE the priority
+	// sort so paging is by arrival, not by presentation order. Never under
+	// reread (All) — that verb ignores the cursor entirely.
+	if !req.All {
+		retained, lastSeqSeen = trimHead(retained, retainedSeqs, req.Head)
 	}
-	if req.Limit > 0 && req.Limit < len(retained) {
-		retained = retained[len(retained)-req.Limit:]
+
+	// Priority ordering happens AFTER the Skip/Limit trim (so -l/--skip
+	// keep their arrival-window semantics) and NEVER touches the cursor:
+	// lastSeqSeen was finalised in the drain loop above, so reordering
+	// the slice is pure presentation — cursor advance and ack emission
+	// below are unaffected.
+	if shouldSortByPriority(req.Follow, req.Channel, req.BareTarget) {
+		sortRetainedByPriority(retained)
 	}
 
 	enc := json.NewEncoder(conn)
@@ -289,6 +317,18 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 		if err := enc.Encode(cliproto.ReadEvent{Message: &mm}); err != nil {
 			return
 		}
+	}
+
+	// Truncation notice: when forward paging cut the window short, tell the
+	// CLI how much was held back so it can surface "showing N of M" on
+	// stderr. The cursor still advances only past the delivered N below, so
+	// the remainder is available on the next read.
+	if req.Head > 0 && !req.All && window > req.Head {
+		_ = enc.Encode(cliproto.ReadEvent{Meta: &cliproto.ReadMeta{
+			Truncated: true,
+			Unread:    window,
+			Shown:     len(retained),
+		}})
 	}
 
 	// Advance the session's cursor to whatever we just delivered. Skipped
@@ -354,6 +394,7 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 			CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 			InReplyTo:    env.InReplyTo,
 			AckRequested: env.AckRequested,
+			Priority:     env.Priority,
 		}
 		if err := enc.Encode(cliproto.ReadEvent{Message: &rm}); err != nil {
 			// CLI has closed the connection — tear down.
@@ -400,6 +441,66 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 	case <-done:
 	case <-ctx.Done():
 	}
+}
+
+// shouldSortByPriority gates the retained-batch priority sort to
+// message-shaped reads only:
+//   - never in follow mode: --tail keeps ONE ordering discipline for the
+//     whole stream — the live half streams one-at-a-time and can't be
+//     reordered, so the drained backlog isn't either;
+//   - never for byte-faithful pipes (stdout / stdin / stdctrl / custom):
+//     WIRE.md §8 promises those replay in arrival order, byte-for-byte,
+//     even if a sender stamped a priority on a frame;
+//   - uncollared reads (BareTarget set) mirror the CLI's tabular default
+//     (the render switch in cli/read.go), so they do sort.
+func shouldSortByPriority(follow bool, channel, bareTarget string) bool {
+	return !follow && (cliproto.IsTabularReadPipe(channel) || bareTarget != "")
+}
+
+// sortRetainedByPriority reorders the delivered window high-first on
+// EffectivePriority (unset/garbage clamp to medium). Stable, so FIFO
+// stream-sequence order is preserved within a tier — an all-default mesh
+// is byte-identical to pre-priority behaviour.
+func sortRetainedByPriority(retained []cliproto.ReadMessage) {
+	sort.SliceStable(retained, func(i, j int) bool {
+		return cliproto.EffectivePriority(retained[i].Priority) < cliproto.EffectivePriority(retained[j].Priority)
+	})
+}
+
+// trimTail applies the `reread` forensic filters to a drained window: drop
+// the first `skip`, then keep the most-recent `limit` (tail-N, like
+// `tail -n`). Order is preserved (oldest first). skip/limit <= 0 are no-ops,
+// so `read`/`subs read` (which never set them) pass through unchanged. This
+// is the extraction of the long-standing inline logic; its semantics are
+// pinned by TestTrimTail_RereadRegression.
+func trimTail(retained []cliproto.ReadMessage, skip, limit int) []cliproto.ReadMessage {
+	if skip > 0 && skip < len(retained) {
+		retained = retained[skip:]
+	} else if skip >= len(retained) && skip > 0 {
+		return nil
+	}
+	if limit > 0 && limit < len(retained) {
+		retained = retained[len(retained)-limit:]
+	}
+	return retained
+}
+
+// trimHead is the forward-paging primitive: deliver the FIRST `head` messages
+// (oldest first) and report the seq the session cursor should advance to —
+// the last DELIVERED message's stream seq, so any unread remainder is
+// surfaced on the next read instead of being skipped. seqs[i] is retained[i]'s
+// stream sequence (parallel slices). head <= 0 disables paging: everything is
+// delivered and the cursor advances to the last message, exactly as before.
+// Returns advanceSeq 0 when nothing is delivered (cursor stays put).
+func trimHead(retained []cliproto.ReadMessage, seqs []uint64, head int) (deliver []cliproto.ReadMessage, advanceSeq uint64) {
+	deliver = retained
+	if head > 0 && head < len(deliver) {
+		deliver = deliver[:head]
+	}
+	if n := len(deliver); n > 0 && n <= len(seqs) {
+		advanceSeq = seqs[n-1]
+	}
+	return deliver, advanceSeq
 }
 
 func writeReadErr(conn net.Conn, e *cliproto.Error) {

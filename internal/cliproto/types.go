@@ -4,10 +4,10 @@ import "time"
 
 // IPC method names. Keep in sync with WIRE.md §7.
 const (
-	IPCStatus      = "Status"
-	IPCLogin       = "Login"
-	IPCCreate      = "Create"
-	IPCSwitch      = "Switch"
+	IPCStatus = "Status"
+	IPCLogin  = "Login"
+	IPCCreate = "Create"
+	IPCSwitch = "Switch"
 	// IPCSend / IPCSendBatch — the publish-IPC verbs used by
 	// `ppz send`, `ppz command`, terminal stdin forwarding, etc.
 	// Renamed from IPCBroadcast/IPCBroadcastBatch in Phase 1.5 to
@@ -16,12 +16,12 @@ const (
 	IPCSend      = "Send"
 	IPCSendBatch = "SendBatch"
 
-	IPCList        = "List"
-	IPCListWatch   = "ListWatch"
-	IPCSubscribe   = "Subscribe"
-	IPCRead        = "Read"
-	IPCConnect     = "Connect"
-	IPCDisconnect  = "Disconnect"
+	IPCList          = "List"
+	IPCListWatch     = "ListWatch"
+	IPCSubscribe     = "Subscribe"
+	IPCRead          = "Read"
+	IPCConnect       = "Connect"
+	IPCDisconnect    = "Disconnect"
 	IPCPipeCreate    = "PipeCreate"
 	IPCPipeDestroy   = "PipeDestroy"
 	IPCSourceDestroy = "SourceDestroy"
@@ -81,7 +81,8 @@ const (
 type ReadRequest struct {
 	Handle    string `json:"handle"`
 	Channel   string `json:"channel"`            // pipe name: broadcast / stdin / stdout
-	Limit     int    `json:"limit,omitempty"`    // 0 = unlimited; non-zero = tail-N (reread only)
+	Limit     int    `json:"limit,omitempty"`    // 0 = unlimited; non-zero = tail-N, the N MOST-RECENT (reread only)
+	Head      int    `json:"head,omitempty"`     // 0 = disabled; non-zero = forward page: the N OLDEST unread, cursor advances only past those N (read / subs read paging; distinct from Limit so reread's tail-N is untouched)
 	Skip      int    `json:"skip,omitempty"`     // drop the first N retained messages (reread only)
 	SinceMS   int64  `json:"since_ms,omitempty"` // 0 = no time filter; >0 = only msgs newer than (now − this many ms) (reread only)
 	JSON      bool   `json:"json,omitempty"`     // emit envelope as JSON instead of payload text
@@ -132,6 +133,14 @@ type ReadEvent struct {
 type ReadMeta struct {
 	Cols int `json:"cols,omitempty"`
 	Rows int `json:"rows,omitempty"`
+	// Forward-paging truncation notice (set when a `read`/`subs read
+	// --limit N` delivered only the first N of a larger unread window).
+	// Truncated flags that more is waiting; Unread is the total that was
+	// unread at request time; Shown is how many this call delivered. The
+	// CLI renders these to stderr so agents know to page again.
+	Truncated bool `json:"truncated,omitempty"`
+	Unread    int  `json:"unread,omitempty"`
+	Shown     int  `json:"shown,omitempty"`
 }
 
 // ReadMessage is the daemon's serialized form of one envelope. The CLI
@@ -152,6 +161,9 @@ type ReadMessage struct {
 	CreatedAt    string `json:"created_at"`
 	InReplyTo    string `json:"in_reply_to"`
 	AckRequested bool   `json:"ack_requested"`
+	// Priority mirrors the envelope: 1=high 2=medium 3=low, 0=unset
+	// (treated as medium). No omitempty — the --json shape is stable.
+	Priority int `json:"priority"`
 }
 
 // StatusRequest carries the caller's session id so the daemon can return
@@ -166,8 +178,8 @@ type StatusReply struct {
 	LoggedIn           bool       `json:"logged_in"`
 	URL                string     `json:"url,omitempty"`
 	KeyPrefix          string     `json:"key_prefix,omitempty"`
-	AccountID              string     `json:"account_id,omitempty"`
-	AccountName            string     `json:"account_name,omitempty"`
+	AccountID          string     `json:"account_id,omitempty"`
+	AccountName        string     `json:"account_name,omitempty"`
 	LastTokenRefreshAt *time.Time `json:"last_token_refresh_at,omitempty"`
 	// LoginCheck is the daemon's last verification result against the
 	// server. "ok" means a recent server-touching call succeeded;
@@ -229,7 +241,7 @@ type LoginRequest struct {
 type LoginReply struct {
 	URL       string `json:"url"`
 	KeyPrefix string `json:"key_prefix"`
-	AccountID     string `json:"account_id"`
+	AccountID string `json:"account_id"`
 }
 
 type CreateRequest struct {
@@ -317,6 +329,9 @@ type SendRequest struct {
 	// envelope fields.
 	InReplyTo    string `json:"in_reply_to,omitempty"`
 	AckRequested bool   `json:"ack_requested,omitempty"`
+	// Priority mirrors the envelope field: 1=high 2=medium 3=low,
+	// 0/omitted = unset. Validated to {0,1,2,3} in handleSend.
+	Priority int `json:"priority,omitempty"`
 	// Session keys the per-session current-source fallback when neither
 	// Handle nor PPZ_CURRENT_HANDLE is set.
 	Session string `json:"session,omitempty"`
@@ -465,8 +480,8 @@ type ListReply struct {
 // UncollaredPipe is the wire projection of a sourceless pipe row + its
 // JetStream stats. Phase 1.5.
 type UncollaredPipe struct {
-	Manifold string `json:"manifold,omitempty"` // '' = root namespace
-	Name     string `json:"name"`
+	Manifold string   `json:"manifold,omitempty"` // '' = root namespace
+	Name     string   `json:"name"`
 	Info     PipeInfo `json:"info"`
 }
 
@@ -522,13 +537,12 @@ type ListInvitesReply struct {
 	Invites []Invite `json:"invites"`
 }
 
-
 type AuthExchangeReply struct {
-	JWT       string    `json:"jwt"`
-	NATSURL   string    `json:"nats_url"`
-	AccountID     string    `json:"account_id"`
-	AccountName   string    `json:"account_name"`
-	ExpiresAt time.Time `json:"expires_at"`
+	JWT         string    `json:"jwt"`
+	NATSURL     string    `json:"nats_url"`
+	AccountID   string    `json:"account_id"`
+	AccountName string    `json:"account_name"`
+	ExpiresAt   time.Time `json:"expires_at"`
 
 	// Auth V2 Phase 3 — short-lived NATS user credentials. The daemon
 	// uses NATSUserJWT + NATSUserSeed in nats.UserJWT(...) when
@@ -592,7 +606,7 @@ type CompleteReply struct {
 // default) is distinguishable from "explicitly zero".
 //
 // Phase 1.5 fields per locked decision #18 four-role grammar:
-//   - Manifold:     hierarchical-grouping segment string ('' = root)
+//   - Manifold:     hierarchical-grouping segment string (” = root)
 //   - SourceHandle: actor identity name; nil = uncollared (sourceless)
 //
 // Handle is retained as a backward-compat alias for SourceHandle until

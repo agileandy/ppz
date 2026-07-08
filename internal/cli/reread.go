@@ -50,5 +50,5 @@ func cmdReread(args []string) error {
 	if *since > 0 {
 		sinceMS = int64(*since / time.Millisecond)
 	}
-	return runRead(target, *asJSON, false /* follow */, *tty, *raw, *bare, true /* all */, *limit, *skip, sinceMS)
+	return runRead(target, *asJSON, false /* follow */, *tty, *raw, *bare, true /* all */, *limit, *skip, sinceMS, 0 /* head: reread never forward-pages */)
 }

@@ -52,6 +52,12 @@ func cmdRead(args []string) error {
 	tty := fs.Bool("tty", false, "render concatenated payloads through a virtual terminal (vt10x); best for <handle>.stdout from a wrapped pty")
 	raw := fs.Bool("raw", false, "write payload bytes verbatim with no message separator; concatenates the full byte stream")
 	bare := fs.Bool("bare", false, "force legacy payload-only output (script-stable opt-out from the v0.23 tabular default on inbox-shaped pipes)")
+	// -l/--limit forward-pages the unread window: deliver the first N
+	// (oldest) unread and advance the cursor only past them, so a flooded
+	// inbox is read a page at a time. Default -1 = flag absent → 0 =
+	// unlimited (backward compatible: a bare `ppz read` still drains).
+	limitLong := fs.Int("limit", -1, "forward-page: read only the first N (oldest) unread, then stop; 0 = unlimited (default)")
+	limitShort := fs.Int("l", -1, "shorthand for --limit")
 	target, flagArgs, err := splitReadArgs(args, false)
 	if err != nil || target == "" {
 		usageExit("read")
@@ -59,13 +65,30 @@ func cmdRead(args []string) error {
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
 	}
-	return runRead(target, *asJSON, *follow, *tty, *raw, *bare, false /* all */, 0, 0, 0)
+	head := readHeadFromLimit(*limitLong, *limitShort, 0 /* default: unlimited */)
+	return runRead(target, *asJSON, *follow, *tty, *raw, *bare, false /* all */, 0, 0, 0, head)
+}
+
+// readHeadFromLimit reconciles the --limit / -l pair (default -1 = absent)
+// into a Head page size. When the flag is absent, the caller's default
+// applies (0 for `read` = unlimited; 20 for `subs read`). An explicit
+// --limit 0 always means "drain all" (Head 0), overriding a non-zero
+// default.
+func readHeadFromLimit(long, short, def int) int {
+	v := long
+	if short != -1 {
+		v = short
+	}
+	if v < 0 { // flag absent
+		return def
+	}
+	return v // includes explicit 0 = drain-all
 }
 
 // runRead is the shared engine for `ppz read` and `ppz reread`. The two
 // verbs differ only in flag surface and the `all` toggle (which the
 // daemon uses to skip cursor consultation + advance).
-func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, skip int, sinceMS int64) error {
+func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, skip int, sinceMS int64, head int) error {
 	if tty && follow {
 		fmt.Fprintln(os.Stderr, "ppz read: --tty and --tail are mutually exclusive (use 'ppz terminal watch' for live render)")
 		os.Exit(2)
@@ -122,13 +145,14 @@ func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, ski
 		Handle:     handle,
 		Channel:    channel,
 		BareTarget: bareTarget,
-		Limit:   limit,
-		Skip:    skip,
-		SinceMS: sinceMS,
-		JSON:    asJSON,
-		Follow:  follow,
-		Session: sessionID(),
-		All:     all,
+		Limit:      limit,
+		Head:       head,
+		Skip:       skip,
+		SinceMS:    sinceMS,
+		JSON:       asJSON,
+		Follow:     follow,
+		Session:    sessionID(),
+		All:        all,
 		// Forward PPZ_CURRENT_HANDLE as the reader's identity hint so
 		// the daemon's ack:read auto-emitter can stamp envelope.sender
 		// when its own per-session State.Current is empty (the shared-
@@ -172,6 +196,7 @@ func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, ski
 	// at our default 200.
 	renderCols := cliproto.DefaultRenderCols
 	renderRows := cliproto.DefaultRenderRows
+	var trunc *cliproto.ReadMeta // set when forward paging held messages back
 
 	dec := bufio.NewScanner(conn)
 	dec.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
@@ -189,6 +214,10 @@ func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, ski
 			}
 			if evt.Meta.Rows > 0 {
 				renderRows = evt.Meta.Rows
+			}
+			if evt.Meta.Truncated {
+				m := evt.Meta
+				trunc = m
 			}
 			continue
 		}
@@ -214,6 +243,14 @@ func runRead(target string, asJSON, follow, tty, raw, bare, all bool, limit, ski
 	}
 	if tty && len(collected) > 0 {
 		fmt.Fprint(os.Stdout, cliproto.RenderTerminal(collected, renderCols, renderRows))
+	}
+	// Forward-paging notice on stderr (kept off stdout so --json/--raw
+	// streams stay clean and scripts piping payloads are unaffected). Tells
+	// the agent more is waiting and how to get it.
+	if trunc != nil && !asJSON && !raw {
+		fmt.Fprintf(os.Stderr,
+			"ppz: showing %d of %d unread on %s; run again for the next page, or --limit 0 to drain all\n",
+			trunc.Shown, trunc.Unread, target)
 	}
 	if err := dec.Err(); err != nil && !errors.Is(err, net.ErrClosed) {
 		// EOF / closed-by-server during follow on SIGINT is expected.
@@ -245,13 +282,17 @@ func currentInboxTarget() (string, error) {
 // splitReadArgs lets `ppz read TGT --tail` and `ppz read --tail TGT` both
 // work. Go's flag package stops at the first positional arg, so we pre-
 // extract the single target. Flags that take a value absorb the next
-// token unless written as --flag=value. `withFilters` widens the value-
-// flag set with -l/--skip/--since for the `reread` verb; `read` rejects
-// those flags entirely (the flagset will error on first encounter).
+// token unless written as --flag=value. `-l/--limit` (paging on `read`,
+// tail-N on `reread`) always takes a value; `withFilters` widens the set
+// further with --skip/--since for the `reread` verb; `read` rejects those
+// two (the flagset will error on first encounter).
 func splitReadArgs(args []string, withFilters bool) (target string, flagArgs []string, err error) {
-	valueFlags := map[string]bool{}
+	valueFlags := map[string]bool{
+		"-l":      true,
+		"-limit":  true,
+		"--limit": true,
+	}
 	if withFilters {
-		valueFlags["-l"] = true
 		valueFlags["-skip"] = true
 		valueFlags["--skip"] = true
 		valueFlags["-since"] = true
