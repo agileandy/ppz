@@ -429,6 +429,14 @@ Flags:
 - `--json` prints the full envelope JSON, one per line.
 - `--tty` / `--raw` unchanged — see cmdRead doc.
 
+`--bare` / `--raw` / `--json` are *output-format* flags, not *ordering*
+flags: on an inbox/broadcast read they select how each message is
+rendered but the batch is still priority-ordered (§ordering above). Only
+the pipe shape (byte-faithful pipes) and `--tail` suppress reordering —
+so `ppz read inbox --bare` still delivers high-priority messages first.
+Reach for a byte-faithful pipe, not `--bare`, when you need strict
+arrival order on a message pipe.
+
 (`reread` mirrors `read`'s output flags including `--bare`.)
 
 ### `ppz diagnostics [--json]`

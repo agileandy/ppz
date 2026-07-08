@@ -254,16 +254,7 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 				}
 				env, eerr := envelope.Unmarshal(msg.Data())
 				if eerr == nil && (sinceCutoff.IsZero() || !env.CreatedAt.Before(sinceCutoff)) {
-					retained = append(retained, cliproto.ReadMessage{
-						ID:           env.ID,
-						Sender:       env.Sender,
-						Subject:      env.Subject,
-						Payload:      env.Payload,
-						CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-						InReplyTo:    env.InReplyTo,
-						AckRequested: env.AckRequested,
-						Priority:     env.Priority,
-					})
+					retained = append(retained, readMessageFromEnvelope(env))
 					lastSeqSeen = md.Sequence.Stream
 				}
 				drained++
@@ -357,16 +348,7 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 			_ = msg.Ack()
 			return
 		}
-		rm := cliproto.ReadMessage{
-			ID:           env.ID,
-			Sender:       env.Sender,
-			Subject:      env.Subject,
-			Payload:      env.Payload,
-			CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-			InReplyTo:    env.InReplyTo,
-			AckRequested: env.AckRequested,
-			Priority:     env.Priority,
-		}
+		rm := readMessageFromEnvelope(env)
 		if err := enc.Encode(cliproto.ReadEvent{Message: &rm}); err != nil {
 			// CLI has closed the connection — tear down.
 			return
@@ -411,6 +393,24 @@ func (d *Daemon) handleRead(ctx context.Context, conn net.Conn, params json.RawM
 	select {
 	case <-done:
 	case <-ctx.Done():
+	}
+}
+
+// readMessageFromEnvelope is the single envelope→ReadMessage projection
+// used by BOTH the retained-drain and live-follow paths, so a field added
+// to the wire (e.g. Priority) can't be plumbed into one path and forgotten
+// in the other. CreatedAt is normalised to the daemon's stable
+// second-precision UTC format.
+func readMessageFromEnvelope(env envelope.Message) cliproto.ReadMessage {
+	return cliproto.ReadMessage{
+		ID:           env.ID,
+		Sender:       env.Sender,
+		Subject:      env.Subject,
+		Payload:      env.Payload,
+		CreatedAt:    env.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		InReplyTo:    env.InReplyTo,
+		AckRequested: env.AckRequested,
+		Priority:     env.Priority,
 	}
 }
 

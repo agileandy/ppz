@@ -1,10 +1,13 @@
 package daemon
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/pipescloud/ppz/internal/cliproto"
+	"github.com/pipescloud/ppz/internal/envelope"
 )
 
 func payloads(msgs []cliproto.ReadMessage) []string {
@@ -125,5 +128,62 @@ func TestShouldSortByPriority(t *testing.T) {
 					c.follow, c.channel, c.bareTarget, got, c.want)
 			}
 		})
+	}
+}
+
+// TestSortRetainedByPriority_StableAboveInsertionThreshold guards FIFO-
+// within-tier at a slice size where Go's sort switches OFF insertion sort
+// (which is incidentally stable) onto pdqsort's quicksort path (which is
+// NOT). With ≤12 elements sort.Slice and sort.SliceStable are byte-
+// identical, so the smaller stability tests above cannot actually catch a
+// SliceStable→Slice regression. This one can: 21 messages, three tiers
+// interleaved, each tier's arrival order (sequence number) must survive.
+func TestSortRetainedByPriority_StableAboveInsertionThreshold(t *testing.T) {
+	tiers := []int{1, 2, 3} // high, medium, low cycled
+	var retained []cliproto.ReadMessage
+	for i := 0; i < 21; i++ {
+		retained = append(retained, cliproto.ReadMessage{
+			Payload:  fmt.Sprintf("%02d", i),
+			Priority: tiers[i%3],
+		})
+	}
+	sortRetainedByPriority(retained)
+
+	// Expected: all highs (i%3==0) in arrival order, then mediums (i%3==1),
+	// then lows (i%3==2) — each block ascending by sequence number.
+	var want []string
+	for _, tier := range []int{0, 1, 2} {
+		for i := 0; i < 21; i++ {
+			if i%3 == tier {
+				want = append(want, fmt.Sprintf("%02d", i))
+			}
+		}
+	}
+	if got := payloads(retained); !reflect.DeepEqual(got, want) {
+		t.Fatalf("21-element sort broke within-tier FIFO:\n got %v\nwant %v", got, want)
+	}
+}
+
+// TestReadMessageFromEnvelope pins the single envelope→ReadMessage
+// projection shared by the drain and follow paths — including Priority,
+// whose follow-path copy is otherwise only exercised by live --tail reads.
+func TestReadMessageFromEnvelope(t *testing.T) {
+	env := envelope.New("alpha", "status", "hello", time.Date(2026, 5, 7, 12, 34, 56, 0, time.UTC))
+	env.InReplyTo = "reply-id"
+	env.AckRequested = true
+	env.Priority = 1
+
+	rm := readMessageFromEnvelope(env)
+	if rm.ID != env.ID || rm.Sender != "alpha" || rm.Subject != "status" || rm.Payload != "hello" {
+		t.Fatalf("core fields not projected: %+v", rm)
+	}
+	if rm.InReplyTo != "reply-id" || !rm.AckRequested {
+		t.Fatalf("reply/ack fields not projected: %+v", rm)
+	}
+	if rm.Priority != 1 {
+		t.Fatalf("Priority not projected: got %d, want 1 (both read paths depend on this)", rm.Priority)
+	}
+	if rm.CreatedAt != "2026-05-07T12:34:56Z" {
+		t.Fatalf("CreatedAt = %q, want stable second-precision UTC", rm.CreatedAt)
 	}
 }
